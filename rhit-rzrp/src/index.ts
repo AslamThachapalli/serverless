@@ -20,7 +20,17 @@ app.use('*', cors());
 const orderSchema = z.object({
   amount: z.number(),
   receipt: z.string().optional(),
-  notes: z.record(z.string(), z.string()).optional(),
+  // notes: z.record(z.string(), z.string()).optional(),
+  notes: z.object({
+    addressId: z.string(),
+    userId: z.string(),
+    orderItems: z.object({
+      productId: z.string(),
+      price: z.number(),
+      quantity: z.number(),
+    }).array(),
+    quantity: z.number(),
+  })
 })
 
 app.post(
@@ -61,7 +71,7 @@ const toValidateSchema = z.object({
 })
 
 app.post(
-  '/verify-payment', 
+  '/verify-payment',
   validator('json', (value, c) => {
     const parsed = toValidateSchema.safeParse(value);
     if (!parsed.success) {
@@ -70,17 +80,17 @@ app.post(
     return parsed.data
   }),
   async (c) => {
-  const { orderId, paymentId, signature } = c.req.valid('json');
+    const { orderId, paymentId, signature } = c.req.valid('json');
 
-  const hmac = createHmac('sha256', c.env.RZRP_KEY_SECRET);
+    const hmac = createHmac('sha256', c.env.RZRP_KEY_SECRET);
 
-  hmac.update(orderId + "|" + paymentId);
+    hmac.update(orderId + "|" + paymentId);
 
-  const generatedHash = hmac.digest('hex')
+    const generatedHash = hmac.digest('hex')
 
-  const isValid = generatedHash == signature
+    const isValid = generatedHash == signature
 
-  return c.json({ isValid });
-});
+    return c.json({ isValid });
+  });
 
 export default app
