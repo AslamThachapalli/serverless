@@ -11,6 +11,9 @@ const encode = (str: string): string => Buffer.from(str, 'binary').toString('bas
 type Bindings = {
   RZRP_KEY_ID: string,
   RZRP_KEY_SECRET: string
+  CAPTURE_TYPE: string
+  AUTOMATIC_EXPIRY_PERIOD: number
+  MANUAL_EXPIRY_PERIOD: number
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -19,18 +22,7 @@ app.use('*', cors());
 
 const orderSchema = z.object({
   amount: z.number(),
-  receipt: z.string().optional(),
-  // notes: z.record(z.string(), z.string()).optional(),
-  notes: z.object({
-    addressId: z.string(),
-    userId: z.string(),
-    orderItems: z.object({
-      productId: z.string(),
-      price: z.number(),
-      quantity: z.number(),
-    }).array(),
-    quantity: z.number(),
-  })
+  receipt: z.string(),
 })
 
 app.post(
@@ -47,7 +39,15 @@ app.post(
 
     const reqBody = {
       ...body,
-      'currency': 'INR'
+      'currency': 'INR',
+      "payment": {
+        "capture": c.env.CAPTURE_TYPE,
+        "capture_options": {
+          "automatic_expiry_period": c.env.AUTOMATIC_EXPIRY_PERIOD,
+          "manual_expiry_period": c.env.MANUAL_EXPIRY_PERIOD,
+          "refund_speed": "normal",
+        }
+      }
     }
 
     let res = await fetch('https://api.razorpay.com/v1/orders', {

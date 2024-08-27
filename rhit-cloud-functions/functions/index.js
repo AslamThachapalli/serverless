@@ -2,7 +2,7 @@ const { onRequest } = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { defineString } = require('firebase-functions/params');
 
 initializeApp();
@@ -35,57 +35,77 @@ function formatDate(timestamp) {
     return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
-exports.createOrder = onRequest(async (req, res) => {
+function getStatus(payHook) {
+    switch(payHook) {
+        case ("payment.failed"): {
+            return "failed"
+        }
+        case ("payment.captured"): {
+            return "paid"
+        }
+        case ("refund.created"): {
+            return "refund initiated"
+        }
+        case ("refund.processed"): {
+            return "refunded"
+        }
+        case ("refund.failed"): {
+            return "refund failed"
+        }
+    }
+}
+
+exports.updatePaymentStatus = onRequest(async (req, res) => {
     const body = req.body
-    const orderEntity = body.payload.order.entity
     const paymentEntity = body.payload.payment.entity
 
-    logger.log(`Create order executed with order_id: ${body.payload.order.entity.id}`)
-
-    const orderObject = {
-        id: orderEntity.receipt,
-        addressId: orderEntity.notes.addressId,
-        providerOrderId: orderEntity.id,
-        status: 'paid',
-        totalAmount: paymentEntity.amount,
-        userId: orderEntity.notes.userId,
-        quantity: orderEntity.notes.quantity,
+    const toUpdate = {
         paymentId: paymentEntity.id,
-        createdAt: orderEntity.created_at,
-        updatedAt: orderEntity.created_at,
+        status: getStatus(body.event),
+        updatedAt: Date.now(),
     }
 
     const firestore = getFirestore()
-    const batch = firestore.batch()
-
-    const orderRef = firestore.collection("orders").doc(orderObject.id)
-    batch.set(orderRef, orderObject)
-
-    const orderItemPromises = orderEntity.notes.orderItems.map(item => {
-        const itemRef = orderRef.collection("orderItems").doc(item.productId);
-        batch.set(itemRef, item)
-    })
-
-    await Promise.all(orderItemPromises)
-
-    await batch.commit()
-
-    logger.log(`order with id ${orderObject.id} added`)
+    const orderRef = firestore.collection("orders").doc(paymentEntity.notes.receiptId)
+    await orderRef.update(toUpdate)
 
     res.status(200).end()
 })
 
-exports.placeDeliveryOrder = onDocumentCreated("/orders/{docId}", async (event) => {
+// todo: Handle webhook order descrepency
+exports.updateRefundStatus = onRequest(async (req, res) => {
+    const body = req.body
+    const refundEntity = body.payload.refund.entity
+    const paymentEntity = body.payload.payment.entity
+
+    const toUpdate = {
+        status: getStatus(body.event),
+        refundId: refundEntity.id,
+        updatedAt: Date.now(),
+    }
+    
+    const firestore = getFirestore()
+    const orderRef = firestore.collection("orders").doc(paymentEntity.notes.receiptId)
+    await orderRef.set(toUpdate, {merge: true})
+
+    res.status(200).end()
+})
+
+exports.placeDeliveryOrder = onDocumentUpdated("/orders/{docId}", async (event) => {
     const firestore = getFirestore()
 
     logger.log("placeDeliveryOrder")
 
-    // Grab the current value of what was written to Firestore.
-    const data = event.data.data();
+    // Grab the current value of what was updated to Firestore.
+    const data = event.data.after.data();
 
-    const { addressId, userId, createdAt } = data;
+    if(data.status != 'paid'){
+        return;
+    }
 
-    logger.log("createdAt", createdAt)
+    const { addressId, userId, updatedAt } = data;
+
+    logger.log("updatedAt", updatedAt)
 
     const [addressSnap, userSnap, orderItemsSnap] = await Promise.all([
         firestore.collection('addresses').doc(addressId).get(),
@@ -133,14 +153,14 @@ exports.placeDeliveryOrder = onDocumentCreated("/orders/{docId}", async (event) 
 
     var raw = JSON.stringify({
         "order_id": data.id,
-        "order_date": formatDate(Date.now()),
+        "order_date": formatDate(updatedAt),
         "pickup_location": "Primary",
         "channel_id": "",
         "comment": "Reseller: RHIT",
         "billing_customer_name": address.name,
         "billing_last_name": "",
         "billing_address": address.address,
-        "billing_address_2": "Near Hokage House",
+        // "billing_address_2": "Near Hokage House",
         "billing_city": address.city,
         "billing_pincode": address.pincode,
         "billing_state": address.state,
@@ -196,5 +216,6 @@ exports.placeDeliveryOrder = onDocumentCreated("/orders/{docId}", async (event) 
     return event.data.ref.set({
         deliveryId: orderData.order_id,
         shipmentId: orderData.shipment_id,
+        updatedAt: Date.now(),
     }, { merge: true });
 });
